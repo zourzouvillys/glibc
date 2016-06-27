@@ -34,7 +34,7 @@ __libc_start_main (int (*main) (int, char **, char ** MAIN_AUXVEC_DECL),
 		   void (*fini) (void),
 		   void (*rtld_fini) (void), void *stack_end)
 {
-  init_cpu_features (&_dl_x86_cpu_features);
+  init_cpu_features (&_dl_x86_cpu_features, &argv[argc + 1]);
   return generic_start_main (main, argc, argv, init, fini, rtld_fini,
 			     stack_end);
 }

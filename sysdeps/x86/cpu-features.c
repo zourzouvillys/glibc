@@ -91,8 +91,137 @@ get_common_indeces (struct cpu_features *cpu_features,
     }
 }
 
+#ifdef __x86_64__
+typedef long long op_t;
+#else
+typedef int op_t;
+#endif
+
+/* Return true if the first LEN bytes of strings A and B are the same
+   where LEN != 0.  We can't use string/memory functions because they
+   trigger an ifunc resolve loop.  */
+
+static bool
+equal (const char *a, const char *b, size_t len)
+{
+  size_t op_len = len % sizeof (op_t);
+  if (op_len)
+    {
+      switch (op_len)
+	{
+	case 1:
+	  if (*(char *) a != *(char *) b)
+	    return false;
+	  break;
+	case 2:
+	  if (*(short *) a != *(short *) b)
+	    return false;
+	  break;
+	case 3:
+	  if (*(short *) a != *(short *) b
+	      || *(char *) (a + 2) != *(char *) (b + 2))
+	    return false;
+	  break;
+#ifdef __x86_64__
+	case 4:
+	  if (*(int *) a != *(int *) b)
+	    return false;
+	  break;
+	default:
+	  if (*(int *) a != *(int *) b
+	      || *(int *) (a + op_len - 4) != *(int *) (b + op_len - 4))
+	    return false;
+	  break;
+#else
+	default:
+	  break;
+#endif
+	}
+      /* Align length to size of op_t.  */
+      len -= op_len;
+      if (len == 0)
+	return true;
+      a += op_len;
+      b += op_len;
+    }
+
+  /* Compare one op_t at a time.  */
+  do
+    {
+      if (*(op_t *) a != *(op_t *) b)
+	return false;
+      len -= sizeof (op_t);
+      if (len == 0)
+	return true;
+      a += sizeof (op_t);
+      b += sizeof (op_t);
+    }
+  while (1);
+}
+
+/* Disable a CPU feature NAME.  We don't enable a CPU feature which isn't
+   availble.  */
+#define CHECK_GLIBC_IFUNC_CPU_OFF(name)					\
+  if (equal (n, #name, sizeof (#name) - 1))				\
+    {									\
+      cpu_features->cpuid[index_cpu_##name].reg_##name			\
+	&= ~bit_cpu_##name;						\
+      break;								\
+    }
+
+/* Disable an ARCH feature NAME.  We don't enable an ARCH feature which
+   isn't availble or has security implication.  */
+#define CHECK_GLIBC_IFUNC_ARCH_OFF(name)				\
+  if (equal (n, #name, sizeof (#name) - 1))				\
+    {									\
+      cpu_features->feature[index_arch_##name]				\
+	&= ~bit_arch_##name;						\
+      break;								\
+    }
+
+/* Enable/disable an ARCH feature NAME.  */
+#define CHECK_GLIBC_IFUNC_ARCH_BOTH(name, disable)			\
+  if (equal (n, #name, sizeof (#name) - 1))				\
+    {									\
+      if (disable)							\
+	cpu_features->feature[index_arch_##name]			\
+	  &= ~bit_arch_##name;						\
+      else								\
+	cpu_features->feature[index_arch_##name]			\
+	  |= bit_arch_##name;						\
+      break;								\
+    }
+
+/* Enable/disable an ARCH feature NAME.  Enable an ARCH feature only
+   if the ARCH feature NEED is also enabled.  */
+#define CHECK_GLIBC_IFUNC_ARCH_NEED_ARCH_BOTH(name, need, disable)	\
+  if (equal (n, #name, sizeof (#name) - 1))				\
+    {									\
+      if (disable)							\
+	cpu_features->feature[index_arch_##name]			\
+	  &= ~bit_arch_##name;						\
+      else if (CPU_FEATURES_ARCH_P (cpu_features, need))		\
+	cpu_features->feature[index_arch_##name]			\
+	  |= bit_arch_##name;						\
+      break;								\
+    }
+
+/* Enable/disable an ARCH feature NAME.  Enable an ARCH feature only
+   if the CPU feature NEED is also enabled.  */
+#define CHECK_GLIBC_IFUNC_ARCH_NEED_CPU_BOTH(name, need, disable)	\
+  if (equal (n, #name, sizeof (#name) - 1))				\
+    {									\
+      if (disable)							\
+	cpu_features->feature[index_arch_##name]			\
+	  &= ~bit_arch_##name;						\
+      else if (CPU_FEATURES_CPU_P (cpu_features, need))			\
+	cpu_features->feature[index_arch_##name]			\
+	  |= bit_arch_##name;						\
+      break;								\
+    }
+
 static inline void
-init_cpu_features (struct cpu_features *cpu_features)
+init_cpu_features (struct cpu_features *cpu_features, char **env)
 {
   unsigned int ebx, ecx, edx;
   unsigned int family = 0;
@@ -268,4 +397,178 @@ no_cpuid:
   cpu_features->family = family;
   cpu_features->model = model;
   cpu_features->kind = kind;
+
+  /* The current IFUNC selection is based on microbenchmarks in glibc.
+     It should give the best performance for most workloads.  But other
+     choices may have better performance for a particular workload or on
+     the hardware which wasn't available when the selection was made.
+     The environment variable, GLIBC_IFUNC=-xxx,yyy,-zzz...., can be
+     used to enable CPU/ARCH feature yyy, disable CPU/ARCH feature yyy
+     and zzz, where the feature name is case-sensitive and has to match
+     the ones in cpu-features.h.  It can be used by glibc developers to
+     tune for a new processor or override the IFUNC selection to improve
+     performance for a particular workload.
+
+     Since all CPU/ARCH features are hardware optimizations without
+     security implication, except for Prefer_MAP_32BIT_EXEC, which can
+     only be disabled, we check GLIBC_IFUNC for programs, including
+     set*id ones.
+
+     NOTE: the IFUNC selection may change over time.  Please check all
+     multiarch implementations when experimenting.  */
+
+  while (*env != NULL)
+    {
+      const char *p, *end;
+      size_t len = sizeof ("GLIBC_IFUNC=");
+
+      end = *env;
+      for (p = end; *p != '\0'; p++)
+	if (--len == 0 && equal (end, "GLIBC_IFUNC=",
+				 sizeof ("GLIBC_IFUNC=") - 1))
+	  {
+	    /* Can't use strlen because it may trigger an ifunc resolve
+	       loop.  */
+	    for (end = p; *end != '\0'; end++);
+	    do
+	      {
+		const char *c, *n;
+		bool disable;
+		size_t nl;
+
+		for (c = p; *c != ','; c++)
+		  if (c >= end)
+		    break;
+
+		len = c - p;
+		disable = *p == '-';
+		if (disable)
+		  {
+		    n = p + 1;
+		    nl = len - 1;
+		  }
+		else
+		  {
+		    n = p;
+		    nl = len;
+		  }
+		switch (nl)
+		  {
+		  default:
+		    break;
+		  case 3:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_CPU_OFF (AVX);
+			CHECK_GLIBC_IFUNC_CPU_OFF (CX8);
+			CHECK_GLIBC_IFUNC_CPU_OFF (FMA);
+			CHECK_GLIBC_IFUNC_CPU_OFF (HTT);
+			CHECK_GLIBC_IFUNC_CPU_OFF (RTM);
+		      }
+		    break;
+		  case 4:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_CPU_OFF (AVX2);
+			CHECK_GLIBC_IFUNC_CPU_OFF (CMOV);
+			CHECK_GLIBC_IFUNC_CPU_OFF (ERMS);
+			CHECK_GLIBC_IFUNC_CPU_OFF (FMA4);
+			CHECK_GLIBC_IFUNC_CPU_OFF (SSE2);
+			CHECK_GLIBC_IFUNC_ARCH_OFF (I586);
+			CHECK_GLIBC_IFUNC_ARCH_OFF (I686);
+		      }
+		    break;
+		  case 5:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_CPU_OFF (SSSE3);
+		      }
+		    break;
+		  case 6:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_CPU_OFF (SSE4_1);
+			CHECK_GLIBC_IFUNC_CPU_OFF (SSE4_2);
+		      }
+		    break;
+		  case 7:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_CPU_OFF (AVX512F);
+			CHECK_GLIBC_IFUNC_CPU_OFF (OSXSAVE);
+		      }
+		    break;
+		  case 8:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_CPU_OFF (AVX512DQ);
+			CHECK_GLIBC_IFUNC_CPU_OFF (POPCOUNT);
+		      }
+		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Slow_BSF, disable);
+		    break;
+		  case 10:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_ARCH_OFF (AVX_Usable);
+			CHECK_GLIBC_IFUNC_ARCH_OFF (FMA_Usable);
+		      }
+		    break;
+		  case 11:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_ARCH_OFF (AVX2_Usable);
+			CHECK_GLIBC_IFUNC_ARCH_OFF (FMA4_Usable);
+		      }
+		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Prefer_ERMS, disable);
+		    CHECK_GLIBC_IFUNC_ARCH_NEED_CPU_BOTH (Slow_SSE4_2,
+							  SSE4_2,
+							  disable);
+		    break;
+		  case 13:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_ARCH_OFF (AVX512F_Usable);
+		      }
+		    CHECK_GLIBC_IFUNC_ARCH_NEED_ARCH_BOTH
+		      (AVX_Fast_Unaligned_Load, AVX_Usable, disable);
+		    break;
+		  case 15:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_ARCH_OFF (AVX512DQ_Usable);
+		      }
+		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Fast_Rep_String, disable);
+		    break;
+		  case 18:
+		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Fast_Copy_Backward,
+						 disable);
+		    break;
+		  case 19:
+		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Fast_Unaligned_Load,
+						 disable);
+		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Fast_Unaligned_Copy,
+						 disable);
+		    break;
+		  case 20:
+		    CHECK_GLIBC_IFUNC_ARCH_NEED_ARCH_BOTH
+		      (Prefer_No_VZEROUPPER, AVX_Usable, disable);
+		    break;
+		  case 21:
+		    if (disable)
+		      {
+			CHECK_GLIBC_IFUNC_ARCH_OFF (Prefer_MAP_32BIT_EXEC);
+		      }
+		    break;
+		  case 26:
+		    CHECK_GLIBC_IFUNC_ARCH_NEED_CPU_BOTH
+		      (Prefer_PMINUB_for_stringop, SSE2, disable);
+		    break;
+		  }
+		p += len + 1;
+	      }
+	    while (p < end);
+	    return;
+	  }
+      env++;
+    }
 }

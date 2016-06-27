@@ -227,7 +227,8 @@ dl_platform_init (void)
 #ifdef SHARED
   /* init_cpu_features has been called early from __libc_start_main in
      static executable.  */
-  init_cpu_features (&GLRO(dl_x86_cpu_features));
+  extern char **_environ attribute_hidden;
+  init_cpu_features (&GLRO(dl_x86_cpu_features), _environ);
 #endif
 }
 
