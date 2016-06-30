@@ -220,6 +220,8 @@ equal (const char *a, const char *b, size_t len)
       break;								\
     }
 
+extern long int __x86_shared_non_temporal_threshold attribute_hidden;
+
 static inline void
 init_cpu_features (struct cpu_features *cpu_features, char **env)
 {
@@ -540,6 +542,18 @@ no_cpuid:
 		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Fast_Rep_String, disable);
 		    break;
 		  case 18:
+		    if (disable)
+		      {
+			if (equal (n, "non_temporal_store",
+				   sizeof ("non_temporal_store") - 1))
+			  {
+			    /* Disable non-temporal store with
+			       "-non_temporal_store".  */
+			    __x86_shared_non_temporal_threshold
+			      = (long int) -1;
+			    break;
+			  }
+		      }
 		    CHECK_GLIBC_IFUNC_ARCH_BOTH (Fast_Copy_Backward,
 						 disable);
 		    break;

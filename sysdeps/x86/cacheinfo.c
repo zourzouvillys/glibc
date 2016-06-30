@@ -762,8 +762,13 @@ intel_bug_no_cache_info:
       __x86_shared_cache_size = shared;
     }
 
-  /* The large memcpy micro benchmark in glibc shows that 6 times of
-     shared cache size is the approximate value above which non-temporal
-     store becomes faster.  */
-  __x86_shared_non_temporal_threshold = __x86_shared_cache_size * 6;
+  /* Set non-temporal threshold to an approximate value if it hasn't
+     been set.  */
+  if (__x86_shared_non_temporal_threshold == 0)
+    {
+      /* The large memcpy microbenchmark in glibc shows that 6 times
+         of shared cache size is the approximate value above which
+	 non-temporal store becomes faster.  */
+      __x86_shared_non_temporal_threshold = __x86_shared_cache_size * 6;
+    }
 }
