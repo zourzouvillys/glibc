@@ -2,13 +2,33 @@
 #define __timespec_defined 1
 
 #include <bits/types.h>
+#include <endian.h>
 
 /* POSIX.1b structure for a time value.  This is like a `struct timeval' but
    has nanoseconds instead of microseconds.  */
+#ifndef __USE_TIME_BITS64
 struct timespec
 {
   __time_t tv_sec;		/* Seconds.  */
   __syscall_slong_t tv_nsec;	/* Nanoseconds.  */
 };
+#else
+/* 64-bit time -- we must pad the 32-bit Posix-mandated long tv_nsec to 64 bit */
+# if BYTE_ORDER == BIG_ENDIAN
+struct timespec
+{
+  __time64_t tv_sec;		/* Seconds.  */
+  int: 32;
+  __syscall_slong_t tv_nsec;	/* Nanoseconds.  */
+};
+# else
+struct timespec
+{
+  __time64_t tv_sec;		/* Seconds.  */
+  __syscall_slong_t tv_nsec;	/* Nanoseconds.  */
+  int: 32;
+};
+# endif
+#endif
 
 #endif
