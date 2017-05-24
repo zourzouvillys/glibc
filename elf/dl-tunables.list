@@ -77,4 +77,26 @@ glibc {
       security_level: SXID_IGNORE
     }
   }
+  tune {
+    ifunc {
+      type: STRING
+      env_alias: GLIBC_IFUNC
+      security_level: SXID_IGNORE
+    }
+    non_temporal_threshold {
+      type: SIZE_T
+      env_alias: GLIBC_NON_TEMPORAL_THRESHOLD
+      security_level: SXID_IGNORE
+    }
+    data_cache_size {
+      type: SIZE_T
+      env_alias: GLIBC_DATA_CACHE_SIZE
+      security_level: SXID_IGNORE
+    }
+    shared_cache_size {
+      type: SIZE_T
+      env_alias: GLIBC_SHARED_CACHE_SIZE
+      security_level: SXID_IGNORE
+    }
+  }
 }

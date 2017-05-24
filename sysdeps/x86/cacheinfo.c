@@ -25,6 +25,15 @@
 #include <cpuid.h>
 #include <init-arch.h>
 
+#if HAVE_TUNABLES
+# define TUNABLE_NAMESPACE tune
+# include <elf/dl-tunables.h>
+#else
+# include <string.h>
+# include <stdlib.h>
+extern char **__environ;
+#endif
+
 static const struct intel_02_cache_info
 {
   unsigned char idx;
@@ -752,6 +761,43 @@ intel_bug_no_cache_info:
 #endif
     }
 
+  /* Data cache size for use in memory and string routines, typically
+     L1 size.  */
+  long int data_cache_size = 0;
+  /* Shared cache size for use in memory and string routines, typically
+     L2 or L3 size.  */
+  long int shared_cache_size = 0;
+  /* Threshold to use non temporal store.  */
+  long int non_temporal_threshold = 0;
+
+#if HAVE_TUNABLES
+  TUNABLE_SET_VAL (non_temporal_threshold, &non_temporal_threshold);
+  TUNABLE_SET_VAL (data_cache_size, &data_cache_size);
+  TUNABLE_SET_VAL (shared_cache_size, &shared_cache_size);
+#else
+  if (__glibc_likely (__environ != NULL)
+      && !__builtin_expect (__libc_enable_secure, 0))
+    {
+      char **runp = __environ;
+      char *envline;
+
+      while (*runp != NULL)
+	{
+	  envline = *runp;
+	  if (!memcmp (envline, "GLIBC_NON_TEMPORAL_THRESHOLD=", 29))
+	    non_temporal_threshold = strtol (&envline[29], NULL, 0);
+	  else if (!memcmp (envline, "GLIBC_DATA_CACHE_SIZE=", 22))
+	    data_cache_size = strtol (&envline[22], NULL, 0);
+	  else if (!memcmp (envline, "GLIBC_SHARED_CACHE_SIZE=", 24))
+	    shared_cache_size = strtol (&envline[24], NULL, 0);
+	  runp++;
+	}
+    }
+#endif
+
+  if (data_cache_size != 0)
+    data = data_cache_size;
+
   if (data > 0)
     {
       __x86_raw_data_cache_size_half = data / 2;
@@ -761,6 +807,9 @@ intel_bug_no_cache_info:
       __x86_data_cache_size_half = data / 2;
       __x86_data_cache_size = data;
     }
+
+  if (shared_cache_size != 0)
+    shared = shared_cache_size;
 
   if (shared > 0)
     {
@@ -775,7 +824,10 @@ intel_bug_no_cache_info:
   /* The large memcpy micro benchmark in glibc shows that 6 times of
      shared cache size is the approximate value above which non-temporal
      store becomes faster.  */
-  __x86_shared_non_temporal_threshold = __x86_shared_cache_size * 6;
+  __x86_shared_non_temporal_threshold
+    = (non_temporal_threshold != 0
+       ? non_temporal_threshold
+       : __x86_shared_cache_size * 6);
 }
 
 #endif
